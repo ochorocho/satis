@@ -116,6 +116,7 @@ class PackagesBuilder extends Builder
             $paths[$dirname][] = [$pattern, $hash];
         }
         $pruneFiles = [];
+
         foreach ($paths as $dirname => $entries) {
             if(is_dir($dirname)) {
                 foreach (new \DirectoryIterator($dirname) as $file) {

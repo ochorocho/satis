@@ -16,6 +16,7 @@ namespace Composer\Satis\Console\Command;
 use Composer\Command\BaseCommand;
 use Composer\Config;
 use Composer\Config\JsonConfigSource;
+use Composer\Factory;
 use Composer\Json\JsonFile;
 use Composer\Json\JsonValidationException;
 use Composer\Satis\Builder\ArchiveBuilder;
@@ -47,7 +48,6 @@ class BuildCommand extends BaseCommand
                 new InputOption('versions-only', null, InputOption::VALUE_OPTIONAL, 'Versions to build. Takes branch or tag name as a comma separated list', null),
                 new InputOption('repository-url', null, InputOption::VALUE_OPTIONAL, 'Only update the repository at given url', null),
                 new InputOption('repository-strict', null, InputOption::VALUE_NONE, 'Also apply the repository filter when resolving dependencies'),
-                new InputOption('no-html-output', null, InputOption::VALUE_NONE, 'Turn off HTML view'),
                 new InputOption('skip-errors', null, InputOption::VALUE_NONE, 'Skip Download or Archive errors'),
                 new InputOption('stats', null, InputOption::VALUE_NONE, 'Display the download progress bar'),
             ])
@@ -116,12 +116,12 @@ EOT
         $repositoryUrl = $input->getOption('repository-url');
         $skipErrors = (bool) $input->getOption('skip-errors');
 
-        // load auth.json authentication information and pass it to the io interface
-        $io = $this->getIO();
-        $io->loadConfiguration($this->getConfiguration());
+        $factory = new Factory();
+        $createConfig = $factory->createConfig();
+        $composerConfiguration = $this->getIO()->loadConfiguration($createConfig);
 
         if (preg_match('{^https?://}i', $configFile)) {
-            $rfs = new RemoteFilesystem($io);
+            $rfs = new RemoteFilesystem($composerConfiguration);
             $contents = $rfs->getContents(parse_url($configFile, PHP_URL_HOST), $configFile, false);
             $config = JsonFile::parseJson($contents, $configFile);
         } else {
@@ -135,7 +135,10 @@ EOT
         }
 
         try {
-            $this->check($configFile);
+            $schemaFile = __DIR__ . '/../../../../composer/res/composer-schema.json';
+            $schema = json_decode(file_get_contents($schemaFile));
+            $validator = new Validator();
+            $validator->check($configFile, $schema);
         } catch (JsonValidationException $e) {
             foreach ($e->getErrors() as $error) {
                 $output->writeln(sprintf('<error>%s</error>', $error));
@@ -172,7 +175,7 @@ EOT
         }
 
         $filesCleanup = GitlabPublisher::findFilesToUpload($outputDir);
-        GitlabPublisher::deleteFiles($filesCleanup);
+        $this->deleteFiles($filesCleanup);
 
         /** @var $application Application */
         $application = $this->getApplication();
@@ -207,90 +210,18 @@ EOT
         $packagesBuilder = new PackagesBuilder($output, $outputDir, $config, $skipErrors, $input);
         $packagesBuilder->dump($packages);
 
-        if ($htmlView = !$input->getOption('no-html-output')) {
-            $htmlView = !isset($config['output-html']) || $config['output-html'];
-        }
-
-        if ($htmlView) {
-            $web = new WebBuilder($output, $outputDir, $config, $skipErrors);
-            $web->setRootPackage($composer->getPackage());
-            $web->dump($packages);
-        }
-
         return 0;
     }
 
-    private function getConfiguration(): Config
-    {
-        $config = new Config();
-
-        // add dir to the config
-        $config->merge(['config' => ['home' => $this->getComposerHome()]]);
-
-        // load global auth file
-        $file = new JsonFile($config->get('home') . '/auth.json');
-        if ($file->exists()) {
-            $config->merge(['config' => $file->read()]);
-        }
-        $config->setAuthConfigSource(new JsonConfigSource($file, true));
-
-        return $config;
-    }
-
-    private function getComposerHome(): string
-    {
-        $home = getenv('COMPOSER_HOME');
-        if (!$home) {
-            if (defined('PHP_WINDOWS_VERSION_MAJOR')) {
-                if (!getenv('APPDATA')) {
-                    throw new \RuntimeException('The APPDATA or COMPOSER_HOME environment variable must be set for composer to run correctly');
-                }
-                $home = strtr(getenv('APPDATA'), '\\', '/') . '/Composer';
-            } else {
-                if (!getenv('HOME')) {
-                    throw new \RuntimeException('The HOME or COMPOSER_HOME environment variable must be set for composer to run correctly');
-                }
-                $home = rtrim(getenv('HOME'), '/') . '/.composer';
-            }
-        }
-
-        return $home;
-    }
-
     /**
-     * @throws ParsingException        if the json file has an invalid syntax
-     * @throws JsonValidationException if the json file doesn't match the schema
+     * Cleanup build files
+     *
+     * @param array $files
      */
-    private function check(string $configFile): bool
+    public static function deleteFiles($files)
     {
-        $content = file_get_contents($configFile);
-
-        $parser = new JsonParser();
-        $result = $parser->lint($content);
-        if (null === $result) {
-            if (defined('JSON_ERROR_UTF8') && JSON_ERROR_UTF8 === json_last_error()) {
-                throw new \UnexpectedValueException('"' . $configFile . '" is not UTF-8, could not parse as JSON');
-            }
-
-            $data = json_decode($content);
-
-            $schemaFile = __DIR__ . '/../../../res/satis-schema.json';
-            $schema = json_decode(file_get_contents($schemaFile));
-            $validator = new Validator();
-            $validator->check($data, $schema);
-
-            if (!$validator->isValid()) {
-                $errors = [];
-                foreach ((array) $validator->getErrors() as $error) {
-                    $errors[] = ($error['property'] ? $error['property'] . ' : ' : '') . $error['message'];
-                }
-
-                throw new JsonValidationException('The json config file does not match the expected JSON schema', $errors);
-            }
-
-            return true;
+        foreach ($files as $file) {
+            unlink($file);
         }
-
-        throw new ParsingException('"' . $configFile . '" does not contain valid JSON' . "\n" . $result->getMessage(), $result->getDetails());
     }
 }

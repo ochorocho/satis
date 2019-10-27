@@ -1,7 +1,5 @@
 <?php
-
 declare(strict_types=1);
-
 /*
  * This file is part of composer/satis.
  *
@@ -23,134 +21,157 @@ class GitlabPublisher extends Publisher
 {
     /** @var array $authHeader Gitlab auth header. */
     protected $authHeader;
-
     /** @var integer $projectUrl Gitlab project url. */
     protected $projectUrl;
 
     public function __construct(OutputInterface $output, string $outputDir, array $config, bool $skipErrors, InputInterface $input)
     {
         parent::__construct($output, $outputDir, $config, $skipErrors, $input);
-
         $this->projectUrl = $this->getProjectUrl();
         $this->authHeader = $this->getAuthHeader();
         $this->outputDir = $outputDir;
-        $this->uploadFilesToGitlab();
+        $this->sendPackageToGitlab();
     }
 
-    public function uploadFilesToGitlab() {
+    /**
+     * Upload attachment and json metadata to Gitlab
+     *
+     * @throws \GuzzleHttp\Exception\GuzzleException
+     */
+    public function sendPackageToGitlab()
+    {
         $files = $this->findFilesToUpload($this->outputDir);
-
-        $composer = '';
-        $attachments = [];
-
-        foreach ($files as $file) {
-
-            if (preg_match('/.json$/', $file, $fileMatches)) {
-                $composer = new JsonFile($file);
-                $composer = $composer->read();
-            } else {
-                // Build attachments to send
-                $this->output->writeln("<options=bold,underscore>Uploading</> $file");
-                $attachments[] = [
-                    'contents' => base64_encode(file_get_contents($file)),
-                    'filename' => basename($file),
-                    'length' => filesize($file)
-                ];
-            }
-        }
-
-        /**
-         * Build Gitlab request
-         */
-        $client = new Client([
-            'timeout' => 20.0,
-        ]);
-
-        $composer = reset($composer);
-
-        $packageName = urlencode($composer['name']);
-        $apiUrl = $this->getProjectUrl() . '/api/v4/projects/' . $this->input->getOption('project-id') . "/packages/composer/" . $packageName;
-
-        $response = $client->request(
-            'PUT',
-            $apiUrl, [
-                'headers' => $this->getAuthHeader(),
-                'body' => json_encode([
-                    'name' => $composer['name'],
-                    'version' => $composer['version'],
-                    'json' => $composer,
-                    'attachments' => $attachments,
-                ])
-            ]
-        );
-
-        if ($response->getStatusCode() == 200) {
-            $this->output->writeln('<info>Package ' . $composer['name'] . ' ' . $composer['version'] . ' published ...</info>');
-        }
+        $client = new Client(['timeout' => 20.0,]);
+        $attachment = $this->prepareAttachment($files['archive']);
+        $this->uploadePackageJson($files['json'], $client, $attachment);
     }
 
     /**
      * Find all files needed for this package
      *
-     * @param string $uploadDir
-     * @return array $files
+     * @param $outputDir
+     * @return array
      */
     public static function findFilesToUpload($outputDir)
     {
-        if(!is_dir($outputDir)) {
+        if (!is_dir($outputDir)) {
             mkdir($outputDir, 0777, true);
         }
+
         $dirs = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($outputDir));
         $files = array();
 
         foreach ($dirs as $file) {
-            if ($file->isDir()) {
-                continue;
+            if ($file->isDir()) continue;
+
+            if (preg_match("/\.(tar|zip)*$/i", $file->getPathname(), $matches)) {
+                $files['archive'] = $file->getPathname();
             }
 
-            if (preg_match("/\.(json|tar|zip)*$/i", $file->getPathname(), $matches)) {
-                $files[] = $file->getPathname();
+            if (preg_match("/\.(json)*$/i", $file->getPathname(), $matches)) {
+                $files['json'] = $file->getPathname();
             }
         }
+
         return $files;
     }
 
     /**
-     * @param array $files
+     * Get project url
+     *
+     * @return string
      */
-    public static function deleteFiles($files) {
-        foreach ($files as $file) {
-            unlink($file);
-        }
-    }
-
-    private function getProjectUrl() {
+    private function getProjectUrl()
+    {
         try {
-            $url = $this->input->getOption('project-url');
+            $url = $this->input->getArgument('project-url');
 
-            if(!empty($url)) {
+            if (!empty($url)) {
                 $projectUrl = parse_url($url);
             }
 
             return sprintf("%s://%s:%s", $projectUrl['scheme'], $projectUrl['host'], $projectUrl['port']);
         } catch (\Exception $e) {
-            $this->output->writeln("<error>Set option '--project-url' or environment variable 'CI_PROJECT_URL' and make sure it is a valid url</error>");
-
+            $this->output->writeln($e);
             exit;
         }
     }
 
-    private function getAuthHeader() {
-        $tokenPrivate = $this->input->getOption('private-token');
-        $tokenJob = getenv('CI_JOB_TOKEN');
-        $authHeader =  $tokenPrivate ? ["Private-Token" => $tokenPrivate] : ["JOB-TOKEN" => $tokenJob];
+    /**
+     * Set Gitlab API authentication header
+     *
+     * @return array
+     */
+    private function getAuthHeader()
+    {
+        $privateToken = $this->input->getArgument('private-token');
+        $jobToken = getenv('CI_JOB_TOKEN');
+        $authHeader = $privateToken ? ["Private-Token" => $privateToken] : ["JOB-TOKEN" => $jobToken];
 
-        if(empty($tokenPrivate) && empty($tokenJob)) {
+        if (empty($privateToken) && empty($jobToken)) {
             $this->output->writeln("<error>Authentication not set. You have following options: \n * Empty will try to use 'CI_JOB_TOKEN' env var \n * Set cli option '--private-token' </error>");
-
             exit;
         }
-
         return $authHeader;
+    }
+
+    /**
+     * Upload package metadata
+     *
+     * @param $file
+     * @param Client $client
+     * @throws \GuzzleHttp\Exception\GuzzleException
+     */
+    private function uploadePackageJson($file, Client $client, $attachment)
+    {
+        $composer = new JsonFile($file);
+        $composer = $composer->read();
+        $composer = reset($composer);
+        $packageName = urlencode($composer['name']);
+        $apiPackageJsonUrl = $this->projectUrl . '/api/v4/projects/' . $this->input->getArgument('project-id') . "/packages/composer/" . $packageName;
+
+        $body = [
+            'name' => $composer['name'],
+            'version' => $composer['version'],
+            'json' => $composer,
+            'package_file' => $attachment,
+        ];
+
+        try {
+            $response = $client->request(
+                'PUT',
+                $apiPackageJsonUrl, [
+                    'headers' => $this->authHeader,
+                    'body' => json_encode($body)
+                ]
+            );
+
+            if ($response->getStatusCode() == 200) {
+                $this->output->writeln('<info>Package ' . $composer['name'] . ' ' . $composer['version'] . ' published ...</info>');
+            } else {
+                $this->output->writeln('<error>Couldn\'t upload package ' . $composer['name'] . ' ' . $composer['version'] . ' ...</error>');
+            }
+        } catch (\Exception $e) {
+            $this->output->writeln($e);
+        }
+
+        return $body;
+    }
+
+    /**
+     * Build array for attachment
+     *
+     * @param $file
+     * @return array
+     */
+    private function prepareAttachment($file)
+    {
+        $attachment = [
+            'contents' => base64_encode(file_get_contents($file)),
+            'filename' => basename($file),
+            'length' => filesize($file)
+        ];
+
+        return $attachment;
     }
 }
