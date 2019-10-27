@@ -14,6 +14,7 @@ namespace Composer\Satis\Publisher;
 use Composer\Composer;
 use Composer\Json\JsonFile;
 use GuzzleHttp\Client;
+use http\Exception;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 
@@ -62,7 +63,9 @@ class GitlabPublisher extends Publisher
         $files = array();
 
         foreach ($dirs as $file) {
-            if ($file->isDir()) continue;
+            if ($file->isDir()) {
+                continue;
+            }
 
             if (preg_match("/\.(tar|zip)*$/i", $file->getPathname(), $matches)) {
                 $files['archive'] = $file->getPathname();
@@ -110,7 +113,6 @@ class GitlabPublisher extends Publisher
 
         if (empty($privateToken) && empty($jobToken)) {
             $this->output->writeln("<error>Authentication not set. You have following options: \n * Empty will try to use 'CI_JOB_TOKEN' env var \n * Set cli option '--private-token' </error>");
-            exit;
         }
         return $authHeader;
     }
@@ -140,7 +142,8 @@ class GitlabPublisher extends Publisher
         try {
             $response = $client->request(
                 'PUT',
-                $apiPackageJsonUrl, [
+                $apiPackageJsonUrl,
+                [
                     'headers' => $this->authHeader,
                     'body' => json_encode($body)
                 ]

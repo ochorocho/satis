@@ -16,6 +16,10 @@ namespace Composer\Satis\Publisher;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 
+/**
+ * Class Publisher
+ * @package Composer\Satis\Publisher
+ */
 abstract class Publisher
 {
     /** @var OutputInterface $output The output Interface. */
@@ -29,8 +33,13 @@ abstract class Publisher
     /** @var bool $skipErrors Skips Exceptions if true. */
     protected $skipErrors;
 
-    public function __construct(OutputInterface $output, string $outputDir, array $config, bool $skipErrors, InputInterface $input = null)
-    {
+    public function __construct(
+        OutputInterface $output,
+        string $outputDir,
+        array $config,
+        bool $skipErrors,
+        InputInterface $input = null
+    ) {
         $this->output = $output;
         $this->input = $input;
         $this->outputDir = $outputDir;
