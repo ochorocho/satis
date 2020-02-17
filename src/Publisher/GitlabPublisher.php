@@ -110,11 +110,13 @@ class GitlabPublisher extends Publisher
         $privateToken = $this->input->getArgument('private-token');
         $jobToken = getenv('CI_JOB_TOKEN');
         $authHeader = $privateToken ? ["Private-Token" => $privateToken] : ["JOB-TOKEN" => $jobToken];
+        $mimeHeader = ['content-type' => 'application/json', 'Accept' => 'application/json'];
 
         if (empty($privateToken) && empty($jobToken)) {
             $this->output->writeln("<error>Authentication not set. You have following options: \n * Empty will try to use 'CI_JOB_TOKEN' env var \n * Set cli option '--private-token' </error>");
         }
-        return $authHeader;
+
+        return array_merge($mimeHeader, $authHeader);
     }
 
     /**
